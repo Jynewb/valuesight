@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>ValueSight - 智能价值投资</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Noto Sans SC,sans-serif;background:#0a0f14;color:#e8eef4;padding:20px}
+h1{color:#00d4aa;margin-bottom:20px}
+.status{margin-bottom:20px;padding:10px;background:#1a2530;border-radius:8px}
+.error{color:#ff5252}
+.success{color:#00c853}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:30px}
+.card{background:#111820;border:1px solid #2a3a4a;border-radius:12px;padding:20px}
+.card .label{color:#8b9caa;font-size:12px;margin-bottom:8px}
+.card .value{font-size:24px;font-weight:700;font-family:monospace}
+.up{color:#00c853}.down{color:#ff5252}
+.search-box{display:flex;gap:10px;margin-bottom:30px}
+.search-box input{padding:12px;border-radius:8px;border:1px solid #2a3a4a;background:#111820;color:#fff;font-size:16px}
+.search-box button{padding:12px 24px;background:#00d4aa;border:none;border-radius:8px;color:#0a0f14;font-weight:600;cursor:pointer}
+.result{display:none;background:#111820;border:1px solid #00d4aa;border-radius:12px;padding:30px;margin-top:30px}
+.result.show{display:block}
+.result .name{font-size:28px;font-weight:700;margin-bottom:10px}
+.result .price{font-size:48px;font-weight:700;font-family:monospace}
+.result .details{display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-top:20px}
+.result .detail{background:#1a2530;padding:15px;border-radius:8px}
+.result .detail .label{font-size:12px;color:#8b9caa}
+.result .detail .value{font-size:16px;font-weight:600}
+canvas{border-radius:8px;margin-top:20px;background:#1a2530}
+.company{margin-top:20px;padding:20px;background:#1a2530;border-radius:8px}
+.company h3{margin-bottom:10px}
+.company p{color:#8b9caa;line-height:1.6}
+.tags{display:flex;gap:10px;margin-top:15px;flex-wrap:wrap}
+.tag{background:linear-gradient(135deg,#1a5f7a,#00d4aa);color:#0a0f14;padding:6px 14px;border-radius:20px;font-size:13px}
+</style>
+</head>
+<body>
+<h1>ValueSight 智能投资</h1>
+<div class="status" id="status">状态: 等待加载...</div>
+<div class="search-box">
+<input type="text" id="searchInput" placeholder="输入股票代码(如600519)">
+<button onclick="searchStock()">搜索</button>
+</div>
+<div class="grid">
+<div class="card"><div class="label">上证指数</div><div class="value" id="shIndex">--</div><div class="up" id="shChange">--</div></div>
+<div class="card"><div class="label">深证成指</div><div class="value" id="szIndex">--</div><div class="up" id="szChange">--</div></div>
+<div class="card"><div class="label">创业板指</div><div class="value" id="cybIndex">--</div><div class="up" id="cybChange">--</div></div>
+<div class="card"><div class="label">沪深300</div><div class="value" id="hsIndex">--</div><div class="up" id="hsChange">--</div></div>
+</div>
+<div class="result" id="result">
+<div class="name" id="rName">--</div>
+<div class="price" id="rPrice">--</div>
+<div class="details" id="rDetails"></div>
+<canvas id="chart" width="600" height="200"></canvas>
+<div class="company" id="company"></div>
+</div>
+<script>
+const API = "http://localhost:3000";
+const codes = ["sh000001","sz399001","sz399006","sh000300"];
+const names = {"sh000001":"上证指数","sz399001":"深证成指","sz399006":"创业板指","sh000300":"沪深300"};
+const info = {
+  "sh600519":{desc:"贵州茅台是中国白酒龙头企业，主营茅台酒。",tags:["白酒龙头","高端消费"]},
+  "sz300750":{desc:"宁德时代是全球领先的动力电池制造商。",tags:["新能源","动力电池"]},
+  "sz002594":{desc:"比亚迪是中国新能源汽车领军企业。",tags:["新能源汽车","一体化"]},
+  "sh600036":{desc:"招商银行是中国领先的商业银行。",tags:["商业银行","零售银行"]}
+};
+
+function fmt(n){return n?n.toString().replace(/\B(?=(\d{3})+(?!\d))/g,","):"--";}
+
+function parse(data,code){
+  let m=data.match(/="([^"]+)"/);
+  if(!m)return null;
+  let a=m[1].split(",");
+  let isIdx=code.startsWith("sh000")||code.startsWith("sz399");
+  let prev=parseFloat(a[2])||0, cur=parseFloat(a[3])||0;
+  let ch=cur-prev, pct=prev?ch/prev*100:0;
+  return {name:isIdx?names[code]:a[0],price:cur,change:ch,pct:pct,open:parseFloat(a[1])||0,high:parseFloat(a[4])||0,low:parseFloat(a[5])||0,prev:prev,vol:a[7]||0};
+}
+
+function setStatus(ok,msg){
+  document.getElementById("status").innerHTML='状态: <span class="'+(ok?"success":"error")+'">'+msg+"</span>";
+}
+
+async function load(){
+  setStatus(false,"加载中...");
+  let ok=true;
+  for(let c of codes){
+    try{
+      let r=await fetch(API+"/api/sina/quote/"+c);
+      let t=await r.text();
+      let d=parse(t,c);
+      if(d){
+        let map={"sh000001":"sh","sz399001":"sz","sz399006":"cyb","sh000300":"hs"};
+        let m=map[c];
+        document.getElementById(m+"Index").textContent=fmt(d.price.toFixed(2));
+        let sign=d.change>=0?"+":"";
+        document.getElementById(m+"Change").textContent=sign+d.pct.toFixed(2)+"%";
+        document.getElementById(m+"Change").className=d.change>=0?"up":"down";
+      }
+    }catch(e){ok=false;console.error(c,e);}
+  }
+  setStatus(ok,ok?"✓ 数据正常":"加载失败");
+}
+
+async function searchStock(){
+  let code=document.getElementById("searchInput").value.trim();
+  if(!code)return;
+  if(!code.startsWith("sh")&&!code.startsWith("sz")){
+    code=(code.length===6?(parseInt(code)<600000?"sz":"sh")+code:null);
+  }
+  if(!code){alert("请输入6位代码");return;}
+  setStatus(false,"搜索中...");
+  try{
+    let r=await fetch(API+"/api/sina/quote/"+code);
+    let t=await r.text();
+    let d=parse(t,code);
+    if(d){
+      let cls=d.change>=0?"up":"down",sign=d.change>=0?"+":"";
+      document.getElementById("rName").textContent=d.name+" ("+code.toUpperCase()+")";
+      let p=document.getElementById("rPrice");
+      p.textContent=fmt(d.price.toFixed(2));
+      p.className="price "+cls;
+      document.getElementById("rDetails").innerHTML=`
+        <div class="detail"><div class="label">今开</div><div class="value">${fmt(d.open.toFixed(2))}</div></div>
+        <div class="detail"><div class="label">最高</div><div class="value">${fmt(d.high.toFixed(2))}</div></div>
+        <div class="detail"><div class="label">最低</div><div class="value">${fmt(d.low.toFixed(2))}</div></div>
+        <div class="detail"><div class="label">昨收</div><div class="value">${fmt(d.prev.toFixed(2))}</div></div>
+        <div class="detail"><div class="label">涨跌额</div><div class="value ${cls}">${sign}${d.change.toFixed(2)}</div></div>
+        <div class="detail"><div class="label">涨跌幅</div><div class="value ${cls}">${sign}${d.pct.toFixed(2)}%</div></div>
+        <div class="detail"><div class="label">成交量</div><div class="value">${fmt(Math.round(d.vol/10000))}万</div></div>
+        <div class="detail"><div class="label">成交额</div><div class="value">${d.vol==0?"--":"数据获取中"}</div></div>
+      `;
+      // 公司简介
+      let cinfo=info[code];
+      if(cinfo){
+        document.getElementById("company").innerHTML=`<h3>🏢 公司简介</h3><p>${cinfo.desc}</p><div class="tags">${cinfo.tags.map(t=>`<span class="tag">${t}</span>`).join("")}</div>`;
+      }else{
+        document.getElementById("company").innerHTML="";
+      }
+      // 画K线
+      let cv=document.getElementById("chart"),ctx=cv.getContext("2d");
+      let w=cv.width,h=cv.height,pad=30;
+      ctx.fillStyle="#1a2530";ctx.fillRect(0,0,w,h);
+      let colors=d.change>=0?"#00c853":"#ff5252";
+      let range=d.high-d.low||1;
+      let yOpen=pad+(h-2*pad)*(d.high-d.open)/range;
+      let yClose=pad+(h-2*pad)*(d.high-d.price)/range;
+      let yHigh=pad,yLow=h-pad;
+      ctx.strokeStyle=colors;ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(w/4,yHigh);ctx.lineTo(w/4,yLow);ctx.stroke();
+      ctx.fillStyle=colors;
+      ctx.fillRect(w/4-10,Math.min(yOpen,yClose),20,Math.abs(yClose-yOpen)||10);
+      ctx.fillStyle="#8b9caa";ctx.font="12px sans-serif";
+      ctx.fillText("开:"+d.open.toFixed(2),w/4-20,h-5);
+      ctx.fillText("高:"+d.high.toFixed(2),w/2-20,h-5);
+      ctx.fillText("低:"+d.low.toFixed(2),w*3/4-20,h-5);
+      ctx.fillText("收:"+d.price.toFixed(2),w-60,h-5);
+      document.getElementById("result").classList.add("show");
+      setStatus(true,"✓ 搜索成功");
+    }else{setStatus(false,"未找到");}
+  }catch(e){setStatus(false,"错误: "+e.message);}
+}
+
+load();
+setInterval(load,10000);
+</script>
+</body>
+</html>
